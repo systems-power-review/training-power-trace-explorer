@@ -1,0 +1,479 @@
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { PowerChart } from "../app/components/PowerChart";
+import { EmptyState, FormatValue, LoadingBlock, QualityBadge } from "../app/components/Ui";
+import { withComputedTotalPower } from "../app/lib/power-series";
+import type { Run, Sample } from "../app/lib/types";
+import { InferenceRequestTimeline } from "./inference-request-timeline";
+import { loadCatalog, loadRun, publicArtifactUrl, type InferenceRequestTimelinePoint, type PublicRun, type PublicRunDetail } from "./public-data";
+
+function isSynthetic(run: Pick<Run, "source_family" | "quality_status">) {
+  return run.source_family === "Synthetic showcase" || run.quality_status === "DEMO_SYNTHETIC";
+}
+
+function useHashRoute() {
+  const [route, setRoute] = useState(() => window.location.hash.replace(/^#/, "") || "/");
+  useEffect(() => {
+    const update = () => setRoute(window.location.hash.replace(/^#/, "") || "/");
+    window.addEventListener("hashchange", update);
+    return () => window.removeEventListener("hashchange", update);
+  }, []);
+  return route;
+}
+
+function Header() {
+  return (
+    <header className="topbar">
+      <div className="topbar-inner">
+        <a href="#/" className="brand-link" aria-label="LLM Power Trace Explorer home">
+          <span className="brand-mark" aria-hidden="true"><i /><i /><i /><i /></span>
+          <span><strong>LLM Power Trace Explorer</strong><small>Training &amp; Inference Research</small></span>
+        </a>
+        <nav className="header-actions">
+          <span className="static-demo-badge"><i /> Anonymous review copy</span>
+          <a className="button button-ghost" href="#/data-guide">Data guide</a>
+          <a className="button button-ghost" href="#/about">ⓘ About</a>
+        </nav>
+      </div>
+    </header>
+  );
+}
+
+function PublicDataNotice() {
+  return (
+    <div className="demo-notice">
+      <span>Public reference data</span>
+      <p>Reviewed public traces are research-ready; separately labeled synthetic showcases demonstrate complete training and inference telemetry. Private HPC files remain outside this deployment.</p>
+    </div>
+  );
+}
+
+function fmtSeconds(value: number) {
+  return value >= 60 ? `${(value / 60).toFixed(1)} min` : `${value.toFixed(1)} s`;
+}
+
+function modelLabel(run: Pick<Run, "model" | "model_metadata_status">) {
+  return run.model_metadata_status === "not_reported" ? "Unknown" : run.model;
+}
+
+function workloadLabel(run: Pick<Run, "workload_type">) {
+  return String(run.workload_type ?? "Training").trim().toLowerCase() === "inference" ? "Inference" : "Training";
+}
+
+function syntheticInferenceTimeline(run: Pick<Run, "duration_observed_s" | "source_family" | "quality_status" | "workload_type">): InferenceRequestTimelinePoint[] | undefined {
+  if (!isSynthetic(run) || workloadLabel(run) !== "Inference") return undefined;
+  const duration = Math.max(60, Math.round(Number(run.duration_observed_s) || 600));
+  const windowS = 5;
+  const clamp = (value: number, lower: number, upper: number) => Math.max(lower, Math.min(upper, value));
+  const round = (value: number) => Number(value.toFixed(1));
+  const rows: InferenceRequestTimelinePoint[] = [];
+  for (let time = 0; time <= duration; time += windowS) {
+    let arrivals: number;
+    let active: number;
+    let prompt: number;
+    let output: number;
+    if (time < 30) {
+      arrivals = time < 10 ? 0 : 2;
+      active = Math.max(0, Math.round(time / 10));
+      prompt = 180;
+      output = 65;
+    } else if (time < 90) {
+      arrivals = 5 + Math.round(2 * Math.sin(time / 8));
+      active = 8 + Math.round((time - 30) * 0.32);
+      prompt = 260 + 18 * Math.sin(time / 12);
+      output = 95 + 10 * Math.cos(time / 15);
+    } else if (time < 190) {
+      arrivals = 11 + Math.round(3 * Math.sin(time / 10));
+      active = 24 + Math.round(3 * Math.sin(time / 17));
+      prompt = 510 + 52 * Math.sin(time / 18);
+      output = 180 + 20 * Math.cos(time / 14);
+    } else if (time < 280) {
+      arrivals = 30 + Math.round(8 * Math.sin(time / 6));
+      active = 43 + Math.round(4 * Math.sin(time / 12));
+      prompt = 740 + 75 * Math.sin(time / 11);
+      output = 300 + 34 * Math.cos(time / 9);
+    } else if (time < 410) {
+      arrivals = 23 + Math.round(6 * Math.sin(time / 8));
+      active = 38 + Math.round(5 * Math.sin(time / 15));
+      prompt = 670 + 60 * Math.sin(time / 13);
+      output = 260 + 28 * Math.cos(time / 10);
+    } else if (time < duration - 60) {
+      arrivals = 12 + Math.round(3 * Math.sin(time / 12));
+      active = 23 + Math.round(3 * Math.sin(time / 18));
+      prompt = 480 + 45 * Math.sin(time / 16);
+      output = 160 + 18 * Math.cos(time / 11);
+    } else {
+      const progress = (time - (duration - 60)) / 60;
+      arrivals = Math.max(0, Math.round(8 * (1 - progress)));
+      active = Math.max(0, Math.round(17 * (1 - progress)));
+      prompt = 330 + 30 * (1 - progress);
+      output = 120 + 15 * (1 - progress);
+    }
+    rows.push({
+      time_relative_s: time,
+      window_s: windowS,
+      requests_arrived: clamp(arrivals, 0, 48),
+      active_requests: clamp(active, 0, 64),
+      mean_prompt_tokens: round(prompt),
+      mean_output_tokens: round(output),
+      mean_request_tokens: round(prompt + output),
+    });
+  }
+  return rows;
+}
+
+function hasTimelineField(timeline: InferenceRequestTimelinePoint[] | undefined, field: "requests_arrived" | "mean_request_tokens" | "mean_prompt_tokens" | "mean_output_tokens") {
+  return Boolean(timeline?.some((point) => {
+    const value = point[field];
+    return value !== null && value !== undefined && Number.isFinite(Number(value));
+  }));
+}
+
+const workloadTypes = ["Training", "Inference"];
+
+function Home({ catalog }: { catalog: PublicRun[] }) {
+  const [search, setSearch] = useState("");
+  const [workload, setWorkload] = useState("Training");
+  const [gpu, setGpu] = useState("All");
+  const [model, setModel] = useState("All");
+  const [method, setMethod] = useState("All");
+  const [quality, setQuality] = useState("All");
+  const [tensorParallel, setTensorParallel] = useState("All");
+  const [kvCacheQuantization, setKvCacheQuantization] = useState("All");
+  const [weightQuantization, setWeightQuantization] = useState("All");
+  const [gpuFrequency, setGpuFrequency] = useState("All");
+  const [inFlightRequests, setInFlightRequests] = useState("All");
+  const [arrivalPattern, setArrivalPattern] = useState("All");
+  const [arrivalRate, setArrivalRate] = useState("All");
+  const inferenceView = workload === "Inference";
+
+  function options(field: keyof Run, inferenceOnly = false) {
+    return Array.from(new Set(catalog
+      .filter((run) => !inferenceOnly || workloadLabel(run) === "Inference")
+      .map((run) => run[field])
+      .filter((value) => value !== undefined && value !== null && value !== "")
+      .map(String))).sort();
+  }
+
+  const runs = useMemo(() => catalog.filter((run) => {
+    const needle = search.trim().toLowerCase();
+    const matchesSearch = !needle || [run.run_id, workloadLabel(run), modelLabel(run), run.model_source_label, run.gpu_type, run.method, run.source_family].some((value) => String(value ?? "").toLowerCase().includes(needle));
+    const matchesWorkload = workload === "All" || workloadLabel(run) === workload;
+    const matchesTraining = (gpu === "All" || run.gpu_type === gpu)
+      && (model === "All" || modelLabel(run) === model)
+      && (method === "All" || run.method === method)
+      && (quality === "All" || run.quality_status === quality);
+    const matchesInference = (gpu === "All" || run.gpu_type === gpu)
+      && (model === "All" || modelLabel(run) === model)
+      && (tensorParallel === "All" || String(run.tensor_parallel_size) === tensorParallel)
+      && (kvCacheQuantization === "All" || run.kv_cache_quantization === kvCacheQuantization)
+      && (weightQuantization === "All" || run.model_weight_quantization === weightQuantization)
+      && (gpuFrequency === "All" || String(run.gpu_frequency_mhz) === gpuFrequency)
+      && (inFlightRequests === "All" || String(run.in_flight_requests ?? run.concurrency) === inFlightRequests)
+      && (arrivalPattern === "All" || run.arrival_pattern === arrivalPattern)
+      && (arrivalRate === "All" || String(run.arrival_rate_label ?? run.arrival_rate_rps) === arrivalRate);
+    return matchesSearch && matchesWorkload && (inferenceView ? matchesInference : matchesTraining);
+  }), [arrivalPattern, arrivalRate, catalog, gpu, gpuFrequency, inFlightRequests, inferenceView, kvCacheQuantization, method, model, quality, search, tensorParallel, weightQuantization, workload]);
+
+  function clear() {
+    setSearch(""); setWorkload("Training"); setGpu("All"); setModel("All"); setMethod("All"); setQuality("All");
+    setTensorParallel("All"); setKvCacheQuantization("All"); setWeightQuantization("All"); setGpuFrequency("All");
+    setInFlightRequests("All"); setArrivalPattern("All"); setArrivalRate("All");
+  }
+  function selectWorkload(value: string) {
+    setWorkload(value); setGpu("All"); setModel("All"); setMethod("All"); setQuality("All");
+    setTensorParallel("All"); setKvCacheQuantization("All"); setWeightQuantization("All"); setGpuFrequency("All");
+    setInFlightRequests("All"); setArrivalPattern("All"); setArrivalRate("All");
+  }
+  const publishedWorkloads = Array.from(new Set(catalog.map(workloadLabel))).sort();
+  const filterSpecs: [string, string, (value: string) => void, string[]][] = inferenceView
+    ? [
+        ["Model", model, setModel, Array.from(new Set(catalog.filter((run) => workloadLabel(run) === "Inference").map(modelLabel))).sort()],
+        ["GPU", gpu, setGpu, options("gpu_type", true)],
+        ["TP number", tensorParallel, setTensorParallel, options("tensor_parallel_size", true)],
+        ["KV cache quantization", kvCacheQuantization, setKvCacheQuantization, options("kv_cache_quantization", true)],
+        ["Model weight quantization", weightQuantization, setWeightQuantization, options("model_weight_quantization", true)],
+        ["GPU frequency", gpuFrequency, setGpuFrequency, options("gpu_frequency_mhz", true)],
+        ["In-flight requests / concurrency", inFlightRequests, setInFlightRequests, Array.from(new Set(catalog.filter((run) => workloadLabel(run) === "Inference").map((run) => run.in_flight_requests ?? run.concurrency).filter((value) => value !== undefined && value !== null && value !== "").map(String))).sort()],
+        ["Arrival pattern", arrivalPattern, setArrivalPattern, options("arrival_pattern", true)],
+        ["Arrival rate", arrivalRate, setArrivalRate, Array.from(new Set(catalog.filter((run) => workloadLabel(run) === "Inference").map((run) => run.arrival_rate_label ?? run.arrival_rate_rps).filter((value) => value !== undefined && value !== null && value !== "").map(String))).sort()],
+      ]
+    : [
+        ["GPU type", gpu, setGpu, options("gpu_type")],
+        ["Model", model, setModel, Array.from(new Set(catalog.map(modelLabel))).sort()],
+        ["Execution method", method, setMethod, options("method")],
+        ["Quality status", quality, setQuality, options("quality_status")],
+      ];
+
+  return (
+    <div className="dashboard-layout static-dashboard">
+      <aside className="filter-sidebar static-sidebar">
+        <div className="sidebar-heading"><div><p className="eyebrow">Catalog controls</p><h2>Filter traces</h2></div><span className="count-pill">{runs.length}</span></div>
+        <label className="search-field"><span className="sr-only">Search traces</span><i>⌕</i><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Run ID, model, GPU…" /></label>
+        <div className="filter-stack">
+          <div className="filter-field workload-filter">
+            <span>Workload type</span>
+            <div className="workload-switch" role="group" aria-label="Choose workload type">
+              {workloadTypes.map((option) => <button key={option} type="button" className={workload === option ? "is-selected" : ""} aria-pressed={workload === option} onClick={() => selectWorkload(option)}>{option}</button>)}
+            </div>
+            <small>{inferenceView ? "Serving-specific filters are shown below." : "Choose Inference to show serving-specific filters."}</small>
+          </div>
+          {filterSpecs.map(([label, value, setter, values]) => (
+            <label className="filter-field" key={label}><span>{label}</span><select value={value} onChange={(event) => setter(event.target.value)}><option>All</option>{values.map((option) => <option key={option}>{option}</option>)}</select></label>
+          ))}
+        </div>
+        <button className="clear-filters" type="button" onClick={clear}>Clear all filters</button>
+        <div className="sidebar-footnote"><span className="privacy-dot" />Reviewed public traces and clearly labeled synthetic showcases are included.</div>
+      </aside>
+      <main className="catalog-main">
+        <PublicDataNotice />
+        <section className="page-intro">
+          <div><p className="eyebrow">Power telemetry catalog</p><h1>LLM Power Trace Explorer</h1><p>Interactive visualization and metadata browser for LLM training and inference GPU power traces.</p></div>
+          <a className="text-link" href="#/about">Metric definitions →</a>
+        </section>
+        <section className="catalog-stats">
+          <div><span>Published traces</span><strong>{catalog.length}</strong><small>public reference runs</small></div>
+          <div><span>Current matches</span><strong>{runs.length}</strong><small>after active filters</small></div>
+          <div><span>GPU families</span><strong>{options("gpu_type").length}</strong><small>{options("gpu_type").join(" · ")}</small></div>
+          <div><span>Workload types</span><strong>{publishedWorkloads.length}</strong><small>{publishedWorkloads.join(" · ")}</small></div>
+        </section>
+        <section className="catalog-card">
+          <div className="table-toolbar"><div><h2>Trace catalog</h2><p>{runs.length} public traces shown</p></div><div className="legend-inline"><QualityBadge status={inferenceView ? "DEMO_SYNTHETIC" : "PASS_MAIN"} /></div></div>
+          <div className="table-scroll">
+            <table className="trace-table">
+              {inferenceView ? <>
+                <thead><tr><th>Run ID</th><th>Workload</th><th>Source</th><th>Model</th><th>GPU</th><th>TP</th><th>KV Cache</th><th>Weight Quant.</th><th>GPU Frequency</th><th>In-flight</th><th>Arrival Pattern</th><th>Arrival Rate</th><th>Duration</th><th>Mean Power</th><th>P99 Power</th><th>Energy</th><th>Quality</th><th /></tr></thead>
+                <tbody>{runs.map((run) => <tr key={run.run_id} onClick={() => { window.location.hash = `/runs/${run.run_id}`; }} tabIndex={0} onKeyDown={(event) => { if (event.key === "Enter") window.location.hash = `/runs/${run.run_id}`; }}>
+                  <td><strong className="run-id">{run.run_id}</strong><small>canonical_power_trace.csv</small></td>
+                  <td>{workloadLabel(run)}</td><td><span className="source-chip">{run.source_family}</span></td><td>{modelLabel(run)}</td><td>{run.gpu_type}</td><td>{run.tensor_parallel_size ?? "Not found"}</td><td>{run.kv_cache_quantization ?? "Not found"}</td><td>{run.model_weight_quantization ?? "Not found"}</td><td>{run.gpu_frequency_mhz != null ? `${run.gpu_frequency_mhz} MHz` : "Not found"}</td><td>{run.in_flight_requests ?? run.concurrency ?? "Not found"}</td><td>{run.arrival_pattern ?? "Not found"}</td><td>{run.arrival_rate_label ?? (run.arrival_rate_rps != null ? `${run.arrival_rate_rps} req/s` : "Not found")}</td><td>{fmtSeconds(run.duration_observed_s)}</td><td><FormatValue value={run.mean_total_power_w} suffix=" W" /></td><td><FormatValue value={run.p99_total_power_w} suffix=" W" /></td><td><FormatValue value={run.total_energy_wh} suffix=" Wh" digits={2} /></td><td><QualityBadge status={run.quality_status} /></td><td><span className="row-arrow">→</span></td>
+                </tr>)}</tbody>
+              </> : <>
+                <thead><tr><th>Run ID</th><th>Workload</th><th>Source</th><th>Model</th><th>Method</th><th>GPU</th><th>GPU Count</th><th>Seq Len</th><th>Microbatch</th><th>Grad Accum</th><th>Duration</th><th>Median Δt</th><th>Mean Power</th><th>P99 Power</th><th>R99 Up 1s</th><th>Energy</th><th>Quality</th><th /></tr></thead>
+                <tbody>{runs.map((run) => <tr key={run.run_id} onClick={() => { window.location.hash = `/runs/${run.run_id}`; }} tabIndex={0} onKeyDown={(event) => { if (event.key === "Enter") window.location.hash = `/runs/${run.run_id}`; }}>
+                  <td><strong className="run-id">{run.run_id}</strong><small>canonical_power_trace.csv</small></td>
+                  <td>{workloadLabel(run)}</td><td><span className="source-chip">{run.source_family}</span></td><td>{modelLabel(run)}</td><td>{run.method}</td><td>{run.gpu_type}</td><td>{run.gpu_count}</td><td>{run.sequence_length}</td><td>{run.microbatch_size}</td><td>{run.grad_accum_steps}</td><td>{fmtSeconds(run.duration_observed_s)}</td><td><FormatValue value={run.sampling_interval_observed_median_s} suffix=" s" digits={3} /></td><td><FormatValue value={run.mean_total_power_w} suffix=" W" /></td><td><FormatValue value={run.p99_total_power_w} suffix=" W" /></td><td><FormatValue value={run.ramp_up_p99_1s_w_per_s} suffix=" W/s" /></td><td><FormatValue value={run.total_energy_wh} suffix=" Wh" digits={2} /></td><td><QualityBadge status={run.quality_status} /></td><td><span className="row-arrow">→</span></td>
+                </tr>)}</tbody>
+              </>}
+            </table>
+          </div>
+          <div className="table-footer"><span>Every trace is reviewed public data or explicitly labeled synthetic.</span><span>Open a run to zoom, pan, and inspect telemetry.</span></div>
+        </section>
+      </main>
+    </div>
+  );
+}
+
+function smoothSamples(samples: Sample[], windowS: number) {
+  if (!windowS) return samples;
+  const byGpu = new Map<string, Sample[]>();
+  samples.forEach((sample) => {
+    const rows = byGpu.get(sample.gpu_id);
+    if (rows) rows.push(sample);
+    else byGpu.set(sample.gpu_id, [sample]);
+  });
+  const result: Sample[] = [];
+  byGpu.forEach((rows) => {
+    const ordered = [...rows].sort((left, right) => left.time_relative_s - right.time_relative_s);
+    let start = 0;
+    let sum = 0;
+    ordered.forEach((row, index) => {
+      sum += row.power_w;
+      while (ordered[start].time_relative_s < row.time_relative_s - windowS) {
+        sum -= ordered[start].power_w;
+        start += 1;
+      }
+      result.push({ ...row, power_w: sum / (index - start + 1) });
+    });
+  });
+  return withComputedTotalPower(result);
+}
+
+function MetadataCard({ title, items }: { title: string; items: [string, ReactNode][] }) {
+  return <section className="metadata-card"><h3>{title}</h3><dl>{items.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl></section>;
+}
+
+function downloadText(filename: string, content: string, type: string) {
+  const url = URL.createObjectURL(new Blob([content], { type }));
+  const link = document.createElement("a");
+  link.href = url; link.download = filename; link.click();
+  URL.revokeObjectURL(url);
+}
+
+function Detail({ detail }: { detail: PublicRunDetail }) {
+  const { run } = detail;
+  const synthetic = isSynthetic(run);
+  const inference = workloadLabel(run) === "Inference";
+  const modelItems: [string, ReactNode][] = inference ? [
+    ["Model", modelLabel(run)],
+    ["Serving engine", run.inference_engine ?? run.method],
+    ["Precision / dtype", `${run.precision} / ${run.compute_dtype}`],
+    ["Prompt profile", run.prompt_profile ?? "Not found"],
+    ["Dataset / request source", run.dataset_name],
+  ] : [
+    ["Model", modelLabel(run)],
+    ["Method", run.method],
+    ["Precision / dtype", `${run.precision} / ${run.compute_dtype}`],
+    ["Sequence length", run.sequence_length],
+    ["Microbatch", run.microbatch_size],
+    ["Grad accumulation", run.grad_accum_steps],
+    ["Dataset", run.dataset_name],
+  ];
+  const inferenceItems: [string, ReactNode][] = [
+    ["TP number", run.tensor_parallel_size ?? "Not found"],
+    ["KV cache quantization", run.kv_cache_quantization ?? "Not found"],
+    ["Model weight quantization", run.model_weight_quantization ?? "Not found"],
+    ["GPU frequency", run.gpu_frequency_mhz != null ? `${run.gpu_frequency_mhz} MHz` : "Not found"],
+    ["In-flight requests / concurrency", run.in_flight_requests ?? run.concurrency ?? "Not found"],
+    ["GPU", run.gpu_type],
+    ["Model", modelLabel(run)],
+    ["Arrival pattern", run.arrival_pattern ?? "Not found"],
+    ["Arrival rate", run.arrival_rate_label ?? (run.arrival_rate_rps != null ? `${run.arrival_rate_rps} req/s` : "Not found")],
+  ];
+  const [smoothing, setSmoothing] = useState(0);
+  const raw = useMemo(() => withComputedTotalPower(detail.samples), [detail.samples]);
+  const samples = useMemo(() => smoothSamples(raw, smoothing), [raw, smoothing]);
+  const requestTimeline = detail.inference_timeline?.length ? detail.inference_timeline : syntheticInferenceTimeline(run);
+  const powerTimeRange = useMemo<[number, number]>(() => {
+    const values = raw.map((sample) => sample.time_relative_s).filter(Number.isFinite);
+    const start = values.length ? Math.min(...values) : 0;
+    const end = values.length ? Math.max(...values) : start + 1;
+    return end > start ? [start, end] : [start, start + 1];
+  }, [raw]);
+  const stages: { time_relative_s: number; stage: string }[] = [];
+  let lastStage = "";
+  raw.forEach((sample) => { if (sample.stage && sample.stage !== lastStage) { stages.push({ time_relative_s: sample.time_relative_s, stage: sample.stage }); lastStage = sample.stage; } });
+  return <main className="detail-main static-detail">
+    <PublicDataNotice />
+    <div className="detail-breadcrumb"><a href="#/">Trace Catalog</a><span>/</span><span>{run.run_id}</span></div>
+    <section className="run-heading"><div><p className="eyebrow">{synthetic ? "Synthetic showcase trace" : "Public trace detail"}</p><h1>Run: {run.run_id}</h1><div className="run-badges">{[workloadLabel(run), run.gpu_type, modelLabel(run), run.method, `Seq ${run.sequence_length}`, run.source_family].map((badge) => <span key={badge}>{badge}</span>)}<QualityBadge status={run.quality_status} /></div></div><div className="heading-actions">{inference && run.request_timeline_file_id ? <a className="button button-secondary" href={publicArtifactUrl(run.request_timeline_file_id)} download>↓ Request Timeline</a> : null}<a className="button button-secondary" href={`#/runs/${run.run_id}/data`}>▤ View Telemetry Data</a>{run.raw_csv_file_id ? <a className="button button-primary" href={publicArtifactUrl(run.raw_csv_file_id)} download>↓ Download CSV</a> : null}</div></section>
+    <div className="detail-grid">
+      <div className="detail-content">
+        <section className="plot-card static-plot-card">
+          <div className="panel-heading plot-heading"><div><p className="eyebrow">Canonical normalized telemetry</p><h2>GPU power over time</h2><p>{samples.length.toLocaleString()} plotted samples · scroll to zoom, drag to pan</p></div><div className="plot-controls"><label><span>Smoothing</span><select value={smoothing} onChange={(event) => setSmoothing(Number(event.target.value))}><option value="0">Raw</option><option value="1">Rolling 1 s</option><option value="5">Rolling 5 s</option><option value="10">Rolling 10 s</option></select></label></div></div>
+          <PowerChart samples={samples} stages={stages} />
+          <div className="plot-footnote"><span>{synthetic ? "Synthetic illustrative telemetry." : "Reviewed public data."}</span><span>Double-click to reset zoom.</span></div>
+        </section>
+        {inference ? <InferenceRequestTimeline timeline={requestTimeline} powerTimeRange={powerTimeRange} synthetic={synthetic} /> : null}
+      </div>
+      <aside className="metadata-panel">
+        <div className="metadata-title"><div><p className="eyebrow">Run record</p><h2>Metadata</h2></div><span>{raw.length} samples</span></div>
+        <MetadataCard title="Run Identity" items={[["Run ID", run.run_id], ["Workload type", workloadLabel(run)], ["Source family", run.source_family], ["Trace path", <code key="trace">{run.trace_path}</code>], ["Data status", synthetic ? "Illustrative synthetic telemetry (not measured)" : "Reviewed public export"]]} />
+        <MetadataCard title="Model and Execution" items={modelItems} />
+        {inference && <MetadataCard title="Inference sweep parameters" items={inferenceItems} />}
+        {inference && <MetadataCard title="Request Telemetry" items={[["Arrival timeline", hasTimelineField(requestTimeline, "requests_arrived") ? (synthetic ? "Synthetic time-aligned series" : "Time-aligned series") : "Not found"], ["Request-size timeline", hasTimelineField(requestTimeline, "mean_request_tokens") || hasTimelineField(requestTimeline, "mean_prompt_tokens") || hasTimelineField(requestTimeline, "mean_output_tokens") ? (synthetic ? "Synthetic time-aligned series" : "Time-aligned series") : "Not found"], ["Request timeline file", run.request_timeline_file_id ? <a key="request-timeline" className="text-link" href={publicArtifactUrl(run.request_timeline_file_id)} download>Download CSV</a> : (requestTimeline?.length ? "Embedded in public display payload" : "Not found")]]} />}
+        <MetadataCard title="Hardware and Logging" items={[["GPU type", run.gpu_type], ["GPU count", run.gpu_count], ["Parallelism", run.parallelism], ["Median interval", `${run.sampling_interval_observed_median_s} s`], ["Clock telemetry", run.has_clock_telemetry ? "Available" : "Not found"], ["Utilization telemetry", run.has_utilization_telemetry ? "Available" : "Not found"], ["Memory telemetry", raw.some((sample) => sample.memory_used_mb != null) ? "Available" : "Not found"], ["Temperature telemetry", run.has_temperature_telemetry ? "Available" : "Not found"], ["Stage labels", run.has_stage_labels ? "Available" : "Not found"]]} />
+        <MetadataCard title="Power Metrics" items={[["Mean total power", `${run.mean_total_power_w} W`], ["P99 total power", `${run.p99_total_power_w} W`], ["Max total power", `${run.max_total_power_w} W`], ["Total energy", `${run.total_energy_wh} Wh`], ["R99 upward ramp", `${run.ramp_up_p99_1s_w_per_s} W/s`]]} />
+        <div className="metadata-actions"><a className="button button-primary" href={`#/runs/${run.run_id}/data`}>▤ View Raw Data</a><button className="button button-secondary" onClick={() => downloadText(`${run.run_id}_metadata.json`, JSON.stringify(run, null, 2), "application/json")}>↓ Metadata JSON</button><a className="button button-ghost" href="#/">← Back to Trace List</a></div>
+      </aside>
+    </div>
+  </main>;
+}
+
+function RawData({ detail }: { detail: PublicRunDetail }) {
+  const { run } = detail;
+  const synthetic = isSynthetic(run);
+  const all = useMemo(() => withComputedTotalPower(detail.samples), [detail.samples]);
+  const runId = run.run_id;
+  const [gpu, setGpu] = useState("All");
+  const [search, setSearch] = useState("");
+  const [page, setPage] = useState(1);
+
+  const filtered = all.filter((row) => (gpu === "All" || row.gpu_id === gpu) && (!search || Object.values(row).join(" ").toLowerCase().includes(search.toLowerCase())));
+  const pageSize = 50;
+  const pages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const rows = filtered.slice((page - 1) * pageSize, page * pageSize);
+  const columns: [keyof Sample, string, string][] = [["timestamp", "Time", ""], ["time_relative_s", "Relative Time", "s"], ["gpu_id", "GPU ID", ""], ["power_w", "Power", "W"], ["total_power_w", "Total Power", "W"], ["gpu_util_pct", "GPU Util", "%"], ["memory_util_pct", "Memory Util", "%"], ["memory_used_mb", "Memory Used", "MB"], ["sm_clock_mhz", "SM Clock", "MHz"], ["temperature_c", "Temperature", "°C"]];
+  return <main className="raw-main static-raw"><PublicDataNotice /><div className="detail-breadcrumb"><a href="#/">Trace Catalog</a><span>/</span><a href={`#/runs/${runId}`}>{runId}</a><span>/</span><span>Telemetry Data</span></div><section className="raw-heading"><div><p className="eyebrow">Canonical normalized samples</p><h1>Telemetry Data</h1><p>{workloadLabel(run)} · {modelLabel(run)} · {run.gpu_type} · {synthetic ? "synthetic illustrative data" : "reviewed public data"}</p></div><div className="heading-actions"><a className="button button-secondary" href={`#/runs/${runId}`}>← Back to Trace</a></div></section>
+    <section className="raw-controls"><label className="search-field raw-search"><span className="sr-only">Search</span><i>⌕</i><input value={search} onChange={(event) => { setSearch(event.target.value); setPage(1); }} placeholder="Search any displayed value…" /></label><label><span>GPU</span><select value={gpu} onChange={(event) => { setGpu(event.target.value); setPage(1); }}><option>All</option>{Array.from(new Set(all.map((row) => row.gpu_id))).map((id) => <option key={id} value={id}>GPU {id}</option>)}</select></label></section>
+    <section className="raw-table-card"><div className="table-toolbar"><div><h2>Samples</h2><p>{filtered.length.toLocaleString()} matching rows · page {page} of {pages}</p></div></div><div className="table-scroll raw-scroll"><table className="trace-table raw-table"><thead><tr>{columns.map(([, label]) => <th key={label}>{label}</th>)}</tr></thead><tbody>{rows.map((row, index) => <tr key={`${row.timestamp}-${row.gpu_id}-${index}`}>{columns.map(([key,,unit]) => <td key={key} className={key === "timestamp" ? "timestamp-cell" : "numeric-cell"}>{String(row[key] ?? "Not found")}{unit && row[key] != null ? ` ${unit}` : ""}</td>)}</tr>)}</tbody></table></div><div className="pagination"><button onClick={() => setPage(Math.max(1, page - 1))} disabled={page === 1}>‹ Previous</button><span>Page <strong>{page}</strong> of <strong>{pages}</strong></span><button onClick={() => setPage(Math.min(pages, page + 1))} disabled={page === pages}>Next ›</button></div></section>
+  </main>;
+}
+
+function DataGuide() {
+  const packageLayout = [
+    "LLM-Power-Trace-Import-v1-<contributor>-<date>/",
+    "├── raw/<run_id>.csv",
+    "├── metadata/<run_id>.json",
+    "├── requests/<run_id>.csv        # optional normalized inference timeline",
+    "├── runs/<run_id>.json           # normalized display payload",
+    "├── catalog.json",
+    "├── publication-audit.json",
+    "├── import-manifest.json",
+    "├── submission.json",
+    "└── README.md",
+  ].join("\n");
+  return <main className="data-guide-main static-about">
+    <PublicDataNotice />
+    <div className="detail-breadcrumb"><a href="#/">Trace Catalog</a><span>/</span><span>Data guide</span></div>
+    <section className="data-guide-hero">
+      <p className="eyebrow">Contributor guide</p>
+      <h1>Prepare data for the trace explorer</h1>
+      <p>Contributors supply factual per-run metadata and original telemetry. The import builder creates the catalog, audit, manifest, and publication records after validation.</p>
+      <div className="data-guide-callout"><strong>Do not estimate missing metadata.</strong><span>Use <code>null</code> or leave the value empty when it was not recorded.</span></div>
+    </section>
+    <section className="data-guide-ownership" aria-label="Submission responsibilities">
+      <div><p className="eyebrow">You provide</p><h2>Per-run research inputs</h2><ul><li>Original GPU telemetry CSV</li><li>One factual metadata record per run</li><li>Optional request-event log for inference</li></ul></div>
+      <div><p className="eyebrow">Builder creates</p><h2>Validated package records</h2><ul><li><code>catalog.json</code> and normalized <code>runs/</code> payloads</li><li><code>import-manifest.json</code> with checksums</li><li><code>publication-audit.json</code>, <code>submission.json</code>, and <code>README.md</code></li></ul></div>
+      <div><p className="eyebrow">Review decides</p><h2>Public availability</h2><ul><li>Schema and integrity checks</li><li>Consent and public-release review</li><li>Move approved data from staging to published</li></ul></div>
+    </section>
+    <div className="data-guide-grid">
+      <section className="data-guide-card"><p className="eyebrow">Package layout</p><h2>What the builder produces</h2><pre>{packageLayout}</pre><p><code>raw/</code> and <code>metadata/</code> are required contributor inputs. The optional <code>requests/</code> timeline may be supplied directly or derived from request-event logs; the remaining records are generated and checked automatically.</p></section>
+      <section className="data-guide-card"><p className="eyebrow">Run metadata</p><h2>Set parameters for each run</h2><p>Record only values confirmed by the experiment configuration. For inference, include model, GPU, GPU count, serving engine, TP number, cache and weight quantization, GPU frequency, concurrency, workload pattern, and any applicable arrival-rate or token totals.</p><p>For training, keep the model, precision, sequence length, microbatch, gradient accumulation, dataset, and checkpoint metadata.</p></section>
+      <section className="data-guide-card"><p className="eyebrow">Inference request log</p><h2>Enable the demand timeline</h2><p>Supply an optional time-binned timeline with <code>time_relative_s</code>, <code>window_s</code>, <code>requests_arrived</code>, <code>mean_prompt_tokens</code>, and <code>mean_output_tokens</code>. Add <code>active_requests</code> when available.</p><p>If you only have event-level logs, provide request ID, arrival time, prompt tokens, and output tokens; the builder can derive the timeline before publication.</p></section>
+      <section className="data-guide-card"><p className="eyebrow">GPU telemetry</p><h2>Keep source readings unchanged</h2><p>Use <code>run_id</code>, <code>timestamp</code>, <code>time_relative_s</code>, <code>gpu_id</code>, and <code>power_w</code>. Preserve original cadence; include clock, utilization, memory, temperature, and stage fields whenever they are recorded.</p><p>Missing optional telemetry must remain empty or <code>null</code>, never inferred.</p></section>
+    </div>
+    <div className="about-actions"><a className="button button-primary" href="#/">← Return to Trace Catalog</a></div>
+  </main>;
+}
+
+function About() {
+  return <main className="about-main static-about"><PublicDataNotice /><div className="detail-breadcrumb"><a href="#/">Trace Catalog</a><span>/</span><span>About</span></div><section className="about-hero"><p className="eyebrow">Research review dataset</p><h1>About the trace explorer</h1><p>This review edition presents canonical GPU power traces selected for intentional public release, plus clearly labeled synthetic training and inference showcases.</p><div className="privacy-callout"><span className="privacy-dot" /><div><strong>Display-only review copy</strong><p>Displayed data is sanitized and either research-ready or explicitly synthetic; private inputs are not included.</p></div></div></section><div className="about-grid"><section className="about-card"><p className="eyebrow">Metric definition</p><h2>Mean power</h2><div className="formula">mean(P<sub>total</sub>(t))</div><p>Mean of total observed GPU power over normalized timestamps.</p></section><section className="about-card"><p className="eyebrow">Metric definition</p><h2>Total energy</h2><div className="formula">∑ P<sub>total</sub>(t) × Δt / 3600</div><p>Timestamp-aware trapezoidal integration in watt-hours.</p></section><section className="about-card"><p className="eyebrow">Metric definition</p><h2>High-percentile power</h2><div className="formula">P95, P99 of P<sub>total</sub>(t)</div><p>High quantiles of the normalized total-power series.</p></section><section className="about-card"><p className="eyebrow">Metric definition</p><h2>Ramp rate</h2><div className="formula">R<sub>δ</sub>(t) = [P(t) − P(t − δ)] / δ</div><p>Computed from actual time rather than fixed row offsets.</p></section></div><div className="about-actions"><a className="button button-primary" href="#/data-guide">Open data guide</a></div></main>;
+}
+
+function NotFound() { return <main className="standalone-state"><EmptyState title="Route not found">Return to the public trace catalog.</EmptyState><a className="button button-primary" href="#/">Back to catalog</a></main>; }
+
+function RunRoute({ catalog, runId, rawData }: { catalog: PublicRun[]; runId: string; rawData: boolean }) {
+  const catalogRun = catalog.find((run) => run.run_id === runId);
+  const [detail, setDetail] = useState<PublicRunDetail | null>(null);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    if (!catalogRun) return;
+    const controller = new AbortController();
+    setDetail(null);
+    setError("");
+    loadRun(catalogRun, controller.signal).then(setDetail).catch((reason) => {
+      if (reason.name !== "AbortError") setError(reason instanceof Error ? reason.message : "Unable to load run");
+    });
+    return () => controller.abort();
+  }, [catalogRun]);
+  if (!catalogRun) return <NotFound />;
+  if (error) return <main className="standalone-state"><EmptyState title="Run data unavailable">{error}</EmptyState></main>;
+  if (!detail) return <main className="standalone-state"><LoadingBlock label="Loading public trace…" /></main>;
+  return rawData ? <RawData detail={detail} /> : <Detail detail={detail} />;
+}
+
+export function StaticDemoApp() {
+  const route = useHashRoute();
+  const [catalog, setCatalog] = useState<PublicRun[] | null>(null);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    const controller = new AbortController();
+    loadCatalog(controller.signal).then(setCatalog).catch((reason) => {
+      if (reason.name !== "AbortError") setError(reason instanceof Error ? reason.message : "Unable to load catalog");
+    });
+    return () => controller.abort();
+  }, []);
+  let page: ReactNode;
+  if (error) page = <main className="standalone-state"><EmptyState title="Catalog unavailable">{error}</EmptyState></main>;
+  else if (!catalog) page = <main className="standalone-state"><LoadingBlock label="Loading public catalog…" /></main>;
+  else if (route === "/" || route === "") page = <Home catalog={catalog} />;
+  else if (route === "/about") page = <About />;
+  else if (route === "/data-guide") page = <DataGuide />;
+  else {
+    const dataMatch = route.match(/^\/runs\/([^/]+)\/data$/);
+    const runMatch = route.match(/^\/runs\/([^/]+)$/);
+    if (dataMatch) page = <RunRoute catalog={catalog} runId={decodeURIComponent(dataMatch[1])} rawData />;
+    else if (runMatch) page = <RunRoute catalog={catalog} runId={decodeURIComponent(runMatch[1])} rawData={false} />;
+    else page = <NotFound />;
+  }
+  return <div className="app-frame static-app"><Header />{page}<footer className="static-footer">LLM Power Trace Explorer · Anonymous review copy</footer></div>;
+}
