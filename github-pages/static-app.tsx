@@ -4,7 +4,7 @@ import { EmptyState, FormatValue, LoadingBlock, QualityBadge } from "../app/comp
 import { withComputedTotalPower } from "../app/lib/power-series";
 import type { Run, Sample } from "../app/lib/types";
 import { InferenceRequestTimeline } from "./inference-request-timeline";
-import { loadCatalog, loadRun, publicArtifactUrl, type InferenceRequestTimelinePoint, type PublicRun, type PublicRunDetail } from "./public-data";
+import { ANONYMOUS_DATASET_FILE_ID, loadCatalog, loadRun, publicArtifactUrl, type InferenceRequestTimelinePoint, type PublicRun, type PublicRunDetail } from "./public-data";
 
 function isSynthetic(run: Pick<Run, "source_family" | "quality_status">) {
   return run.source_family === "Synthetic showcase" || run.quality_status === "DEMO_SYNTHETIC";
@@ -228,7 +228,7 @@ function Home({ catalog }: { catalog: PublicRun[] }) {
         <PublicDataNotice />
         <section className="page-intro">
           <div><p className="eyebrow">Power telemetry catalog</p><h1>LLM Power Trace Explorer</h1><p>Interactive visualization and metadata browser for LLM training and inference GPU power traces.</p></div>
-          <a className="text-link" href="#/about">Metric definitions →</a>
+          <div className="heading-actions"><a className="button button-primary" href={publicArtifactUrl(ANONYMOUS_DATASET_FILE_ID)} download>↓ Download anonymized dataset</a><a className="text-link" href="#/about">Metric definitions →</a></div>
         </section>
         <section className="catalog-stats">
           <div><span>Published traces</span><strong>{catalog.length}</strong><small>public reference runs</small></div>

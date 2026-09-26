@@ -1,5 +1,8 @@
 import type { Run, Sample } from "../app/lib/types";
 
+/** Single-file, compact public release used by the anonymous review site. */
+export const ANONYMOUS_DATASET_FILE_ID = "1QYmMcrinIFy0PUXbb1NYrPGHAJXQb4qe";
+
 export type PublicRun = Run & {
   run_json_file_id?: string;
   /** A compact bundle of aggregate training traces for public display. */
