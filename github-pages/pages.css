@@ -42,6 +42,8 @@ body { background: #f7f8fa; }
 .static-raw .raw-controls { grid-template-columns: minmax(240px, 1fr) 170px; }
 .static-about .about-grid { margin-top: 8px; }
 .metadata-actions .button:last-child { grid-column: 1 / -1; }
+.aggregate-power-notice { margin: 0 16px 12px; padding: 8px 10px; border: 1px solid #d8e4fb; border-radius: 7px; background: #f7f9fe; color: #53617a; font-size: 10px; line-height: 1.45; }
+.aggregate-power-notice strong { color: #344c76; }
 .detail-content { min-width: 0; display: grid; gap: 18px; }
 .workload-switch { display: grid; grid-template-columns: 1fr 1fr; overflow: hidden; border: 1px solid #d5dbe5; border-radius: 7px; background: #fff; }
 .workload-switch button { min-width: 0; border: 0; border-right: 1px solid #d5dbe5; background: transparent; padding: 8px 6px; color: #58657a; font-size: 10px; font-weight: 700; cursor: pointer; }

@@ -67,9 +67,16 @@ function bucketTotal(bucket: TimeBucket) {
  */
 export function withComputedTotalPower(samples: Sample[]): Sample[] {
   if (!samples.length) return samples;
-  const width = totalBucketWidth(samples);
+  // Some display payloads include a server-provided Total series in addition
+  // to per-GPU rows. Totals must be calculated from the individual GPUs only;
+  // otherwise the already-aggregated values would be counted a second time.
+  // Aggregate-only compact releases have no individual GPU rows, in which case
+  // their Total row is intentionally preserved as the only available value.
+  const individualSamples = samples.filter((sample) => String(sample.gpu_id) !== "Total");
+  const sourceSamples = individualSamples.length ? individualSamples : samples;
+  const width = totalBucketWidth(sourceSamples);
   const totals = new Map<number, number>();
-  for (const { key, bucket } of buildTimeBuckets(samples, width)) totals.set(key, bucketTotal(bucket));
+  for (const { key, bucket } of buildTimeBuckets(sourceSamples, width)) totals.set(key, bucketTotal(bucket));
 
   return samples.map((sample) => ({
     ...sample,
@@ -79,7 +86,13 @@ export function withComputedTotalPower(samples: Sample[]): Sample[] {
 
 /** Returns one aggregate Total point for each inferred sampling interval. */
 export function totalPowerSeries(samples: Sample[]): Sample[] {
-  return buildTimeBuckets(samples).map(({ bucket }) => {
+  const individualSamples = samples.filter((sample) => String(sample.gpu_id) !== "Total");
+  if (!individualSamples.length) {
+    return samples
+      .filter((sample) => String(sample.gpu_id) === "Total")
+      .map((sample) => ({ ...sample, gpu_id: "Total", total_power_w: sample.power_w }));
+  }
+  return buildTimeBuckets(individualSamples).map(({ bucket }) => {
     const representative = bucket.samples[0];
     const total = bucketTotal(bucket);
     return {

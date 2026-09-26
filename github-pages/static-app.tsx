@@ -331,6 +331,11 @@ function Detail({ detail }: { detail: PublicRunDetail }) {
   const [smoothing, setSmoothing] = useState(0);
   const raw = useMemo(() => withComputedTotalPower(detail.samples), [detail.samples]);
   const samples = useMemo(() => smoothSamples(raw, smoothing), [raw, smoothing]);
+  const perGpuIds = useMemo(
+    () => Array.from(new Set(raw.map((sample) => String(sample.gpu_id)).filter((gpuId) => gpuId !== "Total"))).sort((left, right) => left.localeCompare(right, undefined, { numeric: true })),
+    [raw],
+  );
+  const hasPerGpuTelemetry = perGpuIds.length > 0;
   const requestTimeline = detail.inference_timeline?.length ? detail.inference_timeline : syntheticInferenceTimeline(run);
   const powerTimeRange = useMemo<[number, number]>(() => {
     const values = raw.map((sample) => sample.time_relative_s).filter(Number.isFinite);
@@ -348,8 +353,9 @@ function Detail({ detail }: { detail: PublicRunDetail }) {
     <div className="detail-grid">
       <div className="detail-content">
         <section className="plot-card static-plot-card">
-          <div className="panel-heading plot-heading"><div><p className="eyebrow">Canonical normalized telemetry</p><h2>GPU power over time</h2><p>{samples.length.toLocaleString()} plotted samples · scroll to zoom, drag to pan</p></div><div className="plot-controls"><label><span>Smoothing</span><select value={smoothing} onChange={(event) => setSmoothing(Number(event.target.value))}><option value="0">Raw</option><option value="1">Rolling 1 s</option><option value="5">Rolling 5 s</option><option value="10">Rolling 10 s</option></select></label></div></div>
+          <div className="panel-heading plot-heading"><div><p className="eyebrow">{hasPerGpuTelemetry ? "Per-GPU normalized telemetry" : "Aggregate normalized telemetry"}</p><h2>{hasPerGpuTelemetry ? "Per-GPU power over time" : "Total GPU power over time"}</h2><p>{samples.length.toLocaleString()} plotted samples · {hasPerGpuTelemetry ? `${perGpuIds.map((gpuId) => `GPU ${gpuId}`).join(", ")} + Total` : "aggregate-only public display"} · scroll to zoom, drag to pan</p></div><div className="plot-controls"><label><span>Smoothing</span><select value={smoothing} onChange={(event) => setSmoothing(Number(event.target.value))}><option value="0">Raw</option><option value="1">Rolling 1 s</option><option value="5">Rolling 5 s</option><option value="10">Rolling 10 s</option></select></label></div></div>
           <PowerChart samples={samples} stages={stages} />
+          {!hasPerGpuTelemetry ? <div className="aggregate-power-notice"><strong>Total-only release.</strong> This compact public record contains the measured aggregate GPU power only; individual GPU values cannot be reconstructed from it.</div> : null}
           <div className="plot-footnote"><span>{synthetic ? "Synthetic illustrative telemetry." : "Reviewed public data."}</span><span>Double-click to reset zoom.</span></div>
         </section>
         {inference ? <InferenceRequestTimeline timeline={requestTimeline} powerTimeRange={powerTimeRange} synthetic={synthetic} /> : null}
@@ -383,7 +389,7 @@ function RawData({ detail }: { detail: PublicRunDetail }) {
   const rows = filtered.slice((page - 1) * pageSize, page * pageSize);
   const columns: [keyof Sample, string, string][] = [["timestamp", "Time", ""], ["time_relative_s", "Relative Time", "s"], ["gpu_id", "GPU ID", ""], ["power_w", "Power", "W"], ["total_power_w", "Total Power", "W"], ["gpu_util_pct", "GPU Util", "%"], ["memory_util_pct", "Memory Util", "%"], ["memory_used_mb", "Memory Used", "MB"], ["sm_clock_mhz", "SM Clock", "MHz"], ["temperature_c", "Temperature", "°C"]];
   return <main className="raw-main static-raw"><PublicDataNotice /><div className="detail-breadcrumb"><a href="#/">Trace Catalog</a><span>/</span><a href={`#/runs/${runId}`}>{runId}</a><span>/</span><span>Telemetry Data</span></div><section className="raw-heading"><div><p className="eyebrow">Canonical normalized samples</p><h1>Telemetry Data</h1><p>{workloadLabel(run)} · {modelLabel(run)} · {run.gpu_type} · {synthetic ? "synthetic illustrative data" : "reviewed public data"}</p></div><div className="heading-actions"><a className="button button-secondary" href={`#/runs/${runId}`}>← Back to Trace</a></div></section>
-    <section className="raw-controls"><label className="search-field raw-search"><span className="sr-only">Search</span><i>⌕</i><input value={search} onChange={(event) => { setSearch(event.target.value); setPage(1); }} placeholder="Search any displayed value…" /></label><label><span>GPU</span><select value={gpu} onChange={(event) => { setGpu(event.target.value); setPage(1); }}><option>All</option>{Array.from(new Set(all.map((row) => row.gpu_id))).map((id) => <option key={id} value={id}>GPU {id}</option>)}</select></label></section>
+    <section className="raw-controls"><label className="search-field raw-search"><span className="sr-only">Search</span><i>⌕</i><input value={search} onChange={(event) => { setSearch(event.target.value); setPage(1); }} placeholder="Search any displayed value…" /></label><label><span>GPU</span><select value={gpu} onChange={(event) => { setGpu(event.target.value); setPage(1); }}><option>All</option>{Array.from(new Set(all.map((row) => row.gpu_id))).map((id) => <option key={id} value={id}>{String(id) === "Total" ? "Total" : `GPU ${id}`}</option>)}</select></label></section>
     <section className="raw-table-card"><div className="table-toolbar"><div><h2>Samples</h2><p>{filtered.length.toLocaleString()} matching rows · page {page} of {pages}</p></div></div><div className="table-scroll raw-scroll"><table className="trace-table raw-table"><thead><tr>{columns.map(([, label]) => <th key={label}>{label}</th>)}</tr></thead><tbody>{rows.map((row, index) => <tr key={`${row.timestamp}-${row.gpu_id}-${index}`}>{columns.map(([key,,unit]) => <td key={key} className={key === "timestamp" ? "timestamp-cell" : "numeric-cell"}>{String(row[key] ?? "Not found")}{unit && row[key] != null ? ` ${unit}` : ""}</td>)}</tr>)}</tbody></table></div><div className="pagination"><button onClick={() => setPage(Math.max(1, page - 1))} disabled={page === 1}>‹ Previous</button><span>Page <strong>{page}</strong> of <strong>{pages}</strong></span><button onClick={() => setPage(Math.min(pages, page + 1))} disabled={page === pages}>Next ›</button></div></section>
   </main>;
 }

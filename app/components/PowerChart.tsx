@@ -68,7 +68,10 @@ export function PowerChart({
   const [range, setRange] = useState<Range | null>(null);
   const [hover, setHover] = useState<{ point: Point; x: number; y: number } | null>(null);
 
-  const gpuIds = useMemo(() => Array.from(new Set(samples.map((sample) => String(sample.gpu_id)))).sort(), [samples]);
+  const gpuIds = useMemo(
+    () => Array.from(new Set(samples.map((sample) => String(sample.gpu_id)).filter((gpuId) => gpuId !== "Total"))).sort((left, right) => left.localeCompare(right, undefined, { numeric: true })),
+    [samples],
+  );
   const [hidden, setHidden] = useState<Set<string>>(new Set());
 
   useEffect(() => {
@@ -78,13 +81,13 @@ export function PowerChart({
 
   const series = useMemo(() => {
     const map = new Map<string, Point[]>();
-    const aggregateOnly = gpuIds.length === 1 && gpuIds[0] === "Total";
-    if (aggregateOnly) {
+    if (!gpuIds.length) {
       map.set("Total", samples.map((sample) => ({ ...sample, name: "Total", y: sample.power_w })));
       return map;
     }
     for (const gpu of gpuIds) map.set(`GPU ${gpu}`, []);
     for (const sample of samples) {
+      if (String(sample.gpu_id) === "Total") continue;
       map.get(`GPU ${sample.gpu_id}`)?.push({ ...sample, name: `GPU ${sample.gpu_id}`, y: sample.power_w });
     }
     map.set("Total", totalPowerSeries(samples).map((sample) => ({ ...sample, name: "Total", y: sample.power_w })));
