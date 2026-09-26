@@ -255,7 +255,7 @@ function Home({ catalog }: { catalog: PublicRun[] }) {
               </>}
             </table>
           </div>
-          <div className="table-footer"><span>Every trace is reviewed public data or explicitly labeled synthetic.</span><span>Open a run to zoom, pan, and inspect telemetry.</span></div>
+          <div className="table-footer"><span>Every displayed trace is reviewed public data.</span><span>Open a run to zoom, pan, and inspect telemetry.</span></div>
         </section>
       </main>
     </div>
