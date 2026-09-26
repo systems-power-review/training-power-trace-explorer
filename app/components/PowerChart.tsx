@@ -78,6 +78,11 @@ export function PowerChart({
 
   const series = useMemo(() => {
     const map = new Map<string, Point[]>();
+    const aggregateOnly = gpuIds.length === 1 && gpuIds[0] === "Total";
+    if (aggregateOnly) {
+      map.set("Total", samples.map((sample) => ({ ...sample, name: "Total", y: sample.power_w })));
+      return map;
+    }
     for (const gpu of gpuIds) map.set(`GPU ${gpu}`, []);
     for (const sample of samples) {
       map.get(`GPU ${sample.gpu_id}`)?.push({ ...sample, name: `GPU ${sample.gpu_id}`, y: sample.power_w });

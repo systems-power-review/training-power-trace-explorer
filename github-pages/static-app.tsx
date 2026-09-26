@@ -42,7 +42,7 @@ function PublicDataNotice() {
   return (
     <div className="demo-notice">
       <span>Public reference data</span>
-      <p>Reviewed public traces are research-ready; separately labeled synthetic showcases demonstrate complete training and inference telemetry. Private HPC files remain outside this deployment.</p>
+      <p>All displayed traces were intentionally selected for public release. Compact training displays exclude raw HPC files, absolute paths, and job logs.</p>
     </div>
   );
 }
@@ -222,7 +222,7 @@ function Home({ catalog }: { catalog: PublicRun[] }) {
           ))}
         </div>
         <button className="clear-filters" type="button" onClick={clear}>Clear all filters</button>
-        <div className="sidebar-footnote"><span className="privacy-dot" />Reviewed public traces and clearly labeled synthetic showcases are included.</div>
+        <div className="sidebar-footnote"><span className="privacy-dot" />Only reviewed public traces are included in this deployment.</div>
       </aside>
       <main className="catalog-main">
         <PublicDataNotice />
@@ -426,7 +426,7 @@ function DataGuide() {
 }
 
 function About() {
-  return <main className="about-main static-about"><PublicDataNotice /><div className="detail-breadcrumb"><a href="#/">Trace Catalog</a><span>/</span><span>About</span></div><section className="about-hero"><p className="eyebrow">Research review dataset</p><h1>About the trace explorer</h1><p>This review edition presents canonical GPU power traces selected for intentional public release, plus clearly labeled synthetic training and inference showcases.</p><div className="privacy-callout"><span className="privacy-dot" /><div><strong>Display-only review copy</strong><p>Displayed data is sanitized and either research-ready or explicitly synthetic; private inputs are not included.</p></div></div></section><div className="about-grid"><section className="about-card"><p className="eyebrow">Metric definition</p><h2>Mean power</h2><div className="formula">mean(P<sub>total</sub>(t))</div><p>Mean of total observed GPU power over normalized timestamps.</p></section><section className="about-card"><p className="eyebrow">Metric definition</p><h2>Total energy</h2><div className="formula">∑ P<sub>total</sub>(t) × Δt / 3600</div><p>Timestamp-aware trapezoidal integration in watt-hours.</p></section><section className="about-card"><p className="eyebrow">Metric definition</p><h2>High-percentile power</h2><div className="formula">P95, P99 of P<sub>total</sub>(t)</div><p>High quantiles of the normalized total-power series.</p></section><section className="about-card"><p className="eyebrow">Metric definition</p><h2>Ramp rate</h2><div className="formula">R<sub>δ</sub>(t) = [P(t) − P(t − δ)] / δ</div><p>Computed from actual time rather than fixed row offsets.</p></section></div><div className="about-actions"><a className="button button-primary" href="#/data-guide">Open data guide</a></div></main>;
+  return <main className="about-main static-about"><PublicDataNotice /><div className="detail-breadcrumb"><a href="#/">Trace Catalog</a><span>/</span><span>About</span></div><section className="about-hero"><p className="eyebrow">Research review dataset</p><h1>About the trace explorer</h1><p>This review edition presents canonical GPU power traces selected for intentional public release.</p><div className="privacy-callout"><span className="privacy-dot" /><div><strong>Display-only review copy</strong><p>Displayed data is sanitized; private inputs and high-frequency source artifacts are not included.</p></div></div></section><div className="about-grid"><section className="about-card"><p className="eyebrow">Metric definition</p><h2>Mean power</h2><div className="formula">mean(P<sub>total</sub>(t))</div><p>Mean of total observed GPU power over normalized timestamps.</p></section><section className="about-card"><p className="eyebrow">Metric definition</p><h2>Total energy</h2><div className="formula">∑ P<sub>total</sub>(t) × Δt / 3600</div><p>Timestamp-aware trapezoidal integration in watt-hours.</p></section><section className="about-card"><p className="eyebrow">Metric definition</p><h2>High-percentile power</h2><div className="formula">P95, P99 of P<sub>total</sub>(t)</div><p>High quantiles of the normalized total-power series.</p></section><section className="about-card"><p className="eyebrow">Metric definition</p><h2>Ramp rate</h2><div className="formula">R<sub>δ</sub>(t) = [P(t) − P(t − δ)] / δ</div><p>Computed from actual time rather than fixed row offsets.</p></section></div><div className="about-actions"><a className="button button-primary" href="#/data-guide">Open data guide</a></div></main>;
 }
 
 function NotFound() { return <main className="standalone-state"><EmptyState title="Route not found">Return to the public trace catalog.</EmptyState><a className="button button-primary" href="#/">Back to catalog</a></main>; }
