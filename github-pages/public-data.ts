@@ -75,3 +75,15 @@ export async function loadRun(run: PublicRun, signal?: AbortSignal): Promise<Pub
 }
 
 export const publicArtifactUrl = (fileId: string) => googleDriveContentUrl(fileId);
+
+/**
+ * A browser-safe attachment endpoint for public files. Unlike the API-media
+ * URL, this does not depend on the page's API-key referrer restriction.
+ */
+export const publicDownloadUrl = (fileId: string) => {
+  const url = new URL("https://drive.usercontent.google.com/download");
+  url.searchParams.set("id", fileId);
+  url.searchParams.set("export", "download");
+  url.searchParams.set("confirm", "t");
+  return url.toString();
+};
